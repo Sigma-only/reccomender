@@ -3,38 +3,38 @@ import numpy as np
 import streamlit as st
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import csr_matrix
 import gdown
-import pandas as pd
 
-# Google Drive shareable link
-url = "https://drive.google.com/uc?export=download&id=1V_woBuQTiOTxj0OjH0Mx-UhyOY7l14Fg"
-output = "n_rating.csv"
-
-# Download the file
-gdown.download(url, output, quiet=False)
-
-# Load the CSV into a pandas DataFrame
-ratings_df = pd.read_csv(output)
-
-
-
-
-# --- Content-Based Filtering Section ---
+# --- Download and Load the Ratings Data Automatically ---
 @st.cache_data
-def load_data():
-    metadata = pd.read_csv('gamedata.csv', low_memory=False)
+def load_ratings():
+    # Google Drive shareable link for the ratings CSV
+    url = "https://drive.google.com/uc?export=download&id=1V_woBuQTiOTxj0OjH0Mx-UhyOY7l14Fg"  # Update with your correct file ID
+    output = "n_rating.csv"
+    
+    # Download the CSV file from Google Drive
+    gdown.download(url, output, quiet=False)
+    
+    # Load ratings CSV into pandas DataFrame
+    ratings_df = pd.read_csv(output)
+    return ratings_df
 
+
+# --- Load Metadata from Local File (no Google Drive) ---
+@st.cache_data
+def load_metadata():
+    metadata = pd.read_csv("gamedata.csv")  # Replace with your local file path
     # Fill NaN values for necessary columns
-    for col in ['short_description', 'developer', 'publisher', 'platforms', 'required_age', 'categories', 'genres', 'steamspy_tags', 'detailed_description', 'about_the_game']:
+    for col in ['short_description', 'developer', 'publisher', 'platforms', 'required_age', 
+                'categories', 'genres', 'steamspy_tags', 'detailed_description', 'about_the_game']:
         metadata[col] = metadata[col].fillna('')
-
+        
     return metadata
 
-metadata = load_data()
 
+# --- Combine features for Content-Based Filtering ---
 def combine_features(row, fields_to_include):
     features = []
 
@@ -57,23 +57,11 @@ def combine_features(row, fields_to_include):
 
     return ' '.join(features)
 
-# Fields user can include for the recommendation
-fields_to_include = ['description', 'genres', 'developer', 'publisher', 'platforms', 'required_age', 'steamspy_tags']
 
-# Apply the combine_features function based on the selected fields
-metadata['combined_features'] = metadata.apply(lambda row: combine_features(row, fields_to_include), axis=1)
-
-# Vectorize the combined features
-tfidf = TfidfVectorizer(stop_words='english')
-tfidf_matrix = tfidf.fit_transform(metadata['combined_features'])
-
-# Compute cosine similarity
-cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)
-
-# Create indices for quick lookup
-indices = pd.Series(metadata.index, index=metadata['name']).drop_duplicates()
-
-def get_content_based_recommendations(game_name='', description_keywords='', developer='', publisher='', platforms='', required_age=None, genres='', steamspy_tags_input='', cosine_sim=cosine_sim, metadata=metadata, top_n=50):
+# --- Content-Based Filtering ---
+def get_content_based_recommendations(game_name='', description_keywords='', developer='', publisher='', platforms='', 
+                                      required_age=None, genres='', steamspy_tags_input='', cosine_sim=None, 
+                                      metadata=None, top_n=50):
 
     filtered_metadata = metadata.copy()
 
@@ -95,7 +83,7 @@ def get_content_based_recommendations(game_name='', description_keywords='', dev
         filtered_metadata = filtered_metadata[filtered_metadata['required_age'] == required_age]
 
     elif genres.strip():
-         filtered_metadata = filtered_metadata[filtered_metadata['genres'].str.contains(genres, case=False, na=False)]
+        filtered_metadata = filtered_metadata[filtered_metadata['genres'].str.contains(genres, case=False, na=False)]
 
     if steamspy_tags_input.strip():
         tags = steamspy_tags_input.lower().split()
@@ -118,12 +106,6 @@ def get_content_based_recommendations(game_name='', description_keywords='', dev
                 or_filter = or_filter | filtered_metadata['steamspy_tags'].str.contains(tag, case=False, na=False)
             filtered_metadata = filtered_metadata[or_filter]
 
-    if not description_keywords.strip():
-        if filtered_metadata.empty:
-            return "No games found matching the specified filters."
-        else:
-            return filtered_metadata['name'].head(top_n)
-
     if filtered_metadata.empty:
         return "No games found matching the specified filters."
 
@@ -139,17 +121,12 @@ def get_content_based_recommendations(game_name='', description_keywords='', dev
     return filtered_metadata['name'].iloc[sim_indices]
 
 
-# --- Collaborative Filtering Section ---
+# --- Collaborative Filtering ---
 @st.cache_data
-
-# Create the user-item interaction matrix for collaborative filtering
 def create_user_item_matrix(ratings_df):
     user_item_matrix = ratings_df.pivot_table(index='user_id', columns='game_id', values='rating')
     return user_item_matrix.fillna(0)
 
-user_item_matrix = create_user_item_matrix(ratings_df)
-
-# Generate collaborative recommendations based on user ratings
 def generate_collaborative_recommendations(user_ratings, user_item_matrix, k=10):
     user_item_matrix = csr_matrix(user_item_matrix.values)
     
@@ -171,13 +148,32 @@ def generate_collaborative_recommendations(user_ratings, user_item_matrix, k=10)
 def run_recommendation_system():
     st.title("Game Recommendation System")
 
-    st.sidebar.header("Content-Based Filtering")
+    # Load metadata and ratings
+    metadata = load_metadata()
+    ratings_df = load_ratings()
+
+    if metadata is None or ratings_df is None:
+        st.error("There was an error downloading or loading the CSV files.")
+        return
+
+    # Preprocess metadata
     fields_to_include_selected = st.sidebar.multiselect(
         "Select criteria to include in recommendations:",
         options=['description', 'genres', 'developer', 'publisher', 'platforms', 'required_age', 'steamspy_tags'],
         default=['description', 'genres', 'developer', 'publisher']
     )
 
+    metadata['combined_features'] = metadata.apply(lambda row: combine_features(row, fields_to_include_selected), axis=1)
+
+    # Vectorize the combined features
+    tfidf = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = tfidf.fit_transform(metadata['combined_features'])
+
+    # Compute cosine similarity
+    cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)
+
+    # --- Content-Based Filtering Section ---
+    st.sidebar.header("Content-Based Filtering")
     game_name = st.text_input("Game Name:")
     description_keywords = st.text_input("Description Keywords:")
     developer = st.text_input("Developer:")
@@ -186,7 +182,6 @@ def run_recommendation_system():
     required_age = st.slider("Required Age:", 0, 18, 0)
     steamspy_tags_input = st.text_input("SteamSpy Tags (use space-separated values):")
 
-    # When the user clicks on the "Generate Recommendations" button
     if st.button('Generate Content-Based Recommendations'):
         st.write("Generating content-based recommendations...")
 
@@ -197,10 +192,13 @@ def run_recommendation_system():
             'publisher': publisher,
             'platforms': platforms,
             'required_age': required_age,
-            'steamspy_tags_input': steamspy_tags_input
+            'steamspy_tags_input': steamspy_tags_input,
+            'cosine_sim': cosine_sim,
+            'metadata': metadata,
+            'top_n': 50
         }
 
-        recommended_games_cb = get_content_based_recommendations(**user_inputs_cb, top_n=50)
+        recommended_games_cb = get_content_based_recommendations(**user_inputs_cb)
 
         if isinstance(recommended_games_cb, str):
             st.error(recommended_games_cb)
@@ -208,7 +206,7 @@ def run_recommendation_system():
             for idx, game in enumerate(recommended_games_cb, 1):
                 st.write(f"{idx}. {game}")
 
-    # Collaborative Filtering Section
+    # --- Collaborative Filtering Section ---
     st.sidebar.header("Collaborative Filtering")
     user_ratings = []
     games_to_rate = metadata['name'].head(10)  # Show top 10 games to rate
@@ -220,6 +218,7 @@ def run_recommendation_system():
     if st.button('Generate Collaborative Recommendations'):
         st.write("Generating collaborative recommendations...")
 
+        user_item_matrix = create_user_item_matrix(ratings_df)
         recommended_games_cf = generate_collaborative_recommendations(user_ratings, user_item_matrix, k=10)
 
         st.write("Recommended Games based on your ratings:")
