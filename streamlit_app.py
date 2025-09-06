@@ -127,7 +127,7 @@ def get_content_based_recommendations(game_name='', description_keywords='', dev
 # --- Collaborative Filtering Section ---
 @st.cache_data
 def load_rating_data():
-    ratings_df = pd.read_csv('user_ratings.csv')
+    ratings_df = pd.read_csv('n_ratings.csv')
     return ratings_df
 
 ratings_df = load_rating_data()
