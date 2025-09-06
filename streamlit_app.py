@@ -8,7 +8,7 @@ from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import csr_matrix
 
 # --- Content-Based Filtering Section ---
-@st.cache
+@st.cache_data
 def load_data():
     metadata = pd.read_csv('gamedata.csv', low_memory=False)
 
@@ -125,7 +125,7 @@ def get_content_based_recommendations(game_name='', description_keywords='', dev
 
 
 # --- Collaborative Filtering Section ---
-@st.cache
+@st.cache_data
 def load_rating_data():
     ratings_df = pd.read_csv('user_ratings.csv')
     return ratings_df
