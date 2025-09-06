@@ -6,6 +6,21 @@ from sklearn.metrics.pairwise import linear_kernel
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import csr_matrix
+import gdown
+import pandas as pd
+
+# Google Drive shareable link
+url = "https://drive.google.com/uc?export=download&id=1V_woBuQTiOTxj0OjH0Mx-UhyOY7l14Fg"
+output = "n_rating.csv"
+
+# Download the file
+gdown.download(url, output, quiet=False)
+
+# Load the CSV into a pandas DataFrame
+ratings_df = pd.read_csv(output)
+
+
+
 
 # --- Content-Based Filtering Section ---
 @st.cache_data
@@ -126,12 +141,13 @@ def get_content_based_recommendations(game_name='', description_keywords='', dev
 
 # --- Collaborative Filtering Section ---
 @st.cache_data
+'''
 def load_rating_data():
     ratings_df = pd.read_csv('n_ratings.csv')
     return ratings_df
 
 ratings_df = load_rating_data()
-
+'''
 # Create the user-item interaction matrix for collaborative filtering
 def create_user_item_matrix(ratings_df):
     user_item_matrix = ratings_df.pivot_table(index='user_id', columns='game_id', values='rating')
