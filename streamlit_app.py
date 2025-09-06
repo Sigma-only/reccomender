@@ -141,13 +141,7 @@ def get_content_based_recommendations(game_name='', description_keywords='', dev
 
 # --- Collaborative Filtering Section ---
 @st.cache_data
-'''
-def load_rating_data():
-    ratings_df = pd.read_csv('n_ratings.csv')
-    return ratings_df
 
-ratings_df = load_rating_data()
-'''
 # Create the user-item interaction matrix for collaborative filtering
 def create_user_item_matrix(ratings_df):
     user_item_matrix = ratings_df.pivot_table(index='user_id', columns='game_id', values='rating')
