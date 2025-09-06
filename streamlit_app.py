@@ -32,25 +32,37 @@ def load_games(path="gamedata.csv"):
 # --- Download and Load the Ratings Data Automatically ---
 @st.cache_data(show_spinner=False)
 def load_ratings(users_path="steamuser.csv", games_path="gamedata.csv"):
-    # Google Drive shareable link for the ratings CSV
     url = "https://drive.usercontent.google.com/download?id=1V_woBuQTiOTxj0OjH0Mx-UhyOY7l14Fg&export=download"
     output = "n_ratings.csv"
-
-    # Download only if not cached locally
     gdown.download(url, output, quiet=False)
 
-    # Load CSVs
     ratings_df = pd.read_csv(output, low_memory=False)
     users_df = pd.read_csv(users_path, low_memory=False)
     games_df = pd.read_csv(games_path, low_memory=False)
 
-    # Sanity check
+    # --- Normalize column names ---
+    colmap = {c.lower(): c for c in ratings_df.columns}
+    # handle appid
+    if "appid" not in ratings_df.columns:
+        for alt in ["app_id", "game_id", "appid"]:
+            if alt in colmap:
+                ratings_df.rename(columns={colmap[alt]: "appid"}, inplace=True)
+                break
+    # handle userID
+    if "userID" not in ratings_df.columns:
+        for alt in ["user_id", "userid", "userID"]:
+            if alt in colmap:
+                ratings_df.rename(columns={colmap[alt]: "userID"}, inplace=True)
+                break
+
     if "appid" not in ratings_df.columns or "userID" not in ratings_df.columns:
-        st.error("Ratings file must contain 'appid' and 'userID' columns.")
+        st.error(f"Ratings file must have user and app id. Found columns: {ratings_df.columns.tolist()}")
         raise ValueError("Invalid ratings file format.")
 
+    # Merge to get game names for appid
     merged_df = pd.merge(ratings_df, games_df[["appid", "name"]], on="appid", how="left")
     return ratings_df, users_df, games_df, merged_df
+
 
 
 # -------------------------
