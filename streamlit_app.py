@@ -4,6 +4,29 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from scipy.sparse import csr_matrix
 from sklearn.metrics.pairwise import cosine_similarity
+pip install requests
+import streamlit as st
+import pandas as pd
+import requests
+
+# Function to download file from Google Drive
+def download_from_google_drive(file_id, destination):
+    url = f'https://drive.google.com/uc?id={file_id}'
+    response = requests.get(url)
+    with open(destination, 'wb') as f:
+        f.write(response.content)
+    st.write(f"Downloaded file: {destination}")
+
+# Replace with your actual file ID from Google Drive
+file_id = '1V_woBuQTiOTxj0OjH0Mx-UhyOY7l14Fg'  # Replace with your file ID
+
+# Download the file to the current working directory
+download_from_google_drive(file_id, 'n_ratings.csv')
+
+
+
+
+
 
 # --- Content-Based Filtering Section ---
 metadata = pd.read_csv('gamedata.csv', low_memory=False)
