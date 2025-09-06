@@ -11,7 +11,7 @@ import gdown
 @st.cache_data
 def load_ratings():
     # Google Drive shareable link for the ratings CSV
-    url = "https://drive.google.com/uc?export=download&id=1V_woBuQTiOTxj0OjH0Mx-UhyOY7l14Fg"  # Update with your correct file ID
+    url = "https://drive.usercontent.google.com/download?id=1V_woBuQTiOTxj0OjH0Mx-UhyOY7l14Fg&export=download"  # Update with your correct file ID
     output = "n_rating.csv"
     
     # Download the CSV file from Google Drive
