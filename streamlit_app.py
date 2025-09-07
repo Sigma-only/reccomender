@@ -1,28 +1,50 @@
+# streamlit_recommendation_app.py
 import streamlit as st
 import pandas as pd
-import gdown
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel, cosine_similarity
 from scipy.sparse import csr_matrix
+import os
+import glob
 
-# --- Load Data ---
+# Set page config
+st.set_page_config(
+    page_title="Game Recommendation System",
+    page_icon="🎮",
+    layout="wide"
+)
+
+# --- Data Loading Functions ---
 @st.cache_data
 def load_metadata():
-    return pd.read_csv("gamedata.csv", low_memory=False)
-
-@st.cache_data
-def load_ratings():
-    url = "https://drive.usercontent.google.com/download?id=1V_woBuQTiOTxj0OjH0Mx-UhyOY7l14Fg&export=download"  # <-- replace with your file ID
-    output = "n_ratings.csv"
-    gdown.download(url, output, quiet=False)
-    ratings_df = pd.read_csv(output)
-    return ratings_df
+    """Load game metadata"""
+    return pd.read_csv('gamedata.csv', low_memory=False)
 
 @st.cache_data
 def load_users():
-    return pd.read_csv("steamuser.csv")
+    """Load user data"""
+    return pd.read_csv('steamuser.csv')
 
-# --- Content-Based Filtering ---
+@st.cache_data
+def load_ratings():
+    """
+    Load and combine all rating chunks
+    This handles the split n_ratings.csv files
+    """
+    rating_files = glob.glob('split_ratings/n_ratings_chunk_*.csv')
+    
+    if not rating_files:
+        st.error("No rating files found! Please make sure split_ratings directory exists with n_ratings_chunk_*.csv files")
+        return None
+    
+    rating_chunks = []
+    for file in sorted(rating_files):
+        chunk = pd.read_csv(file)
+        rating_chunks.append(chunk)
+    
+    return pd.concat(rating_chunks, ignore_index=True)
+
+# --- Content-Based Filtering Functions ---
 def combine_features(row, fields_to_include):
     features = []
     if 'description' in fields_to_include:
@@ -41,144 +63,254 @@ def combine_features(row, fields_to_include):
         features.append(str(row['required_age']))
     if 'steamspy_tags' in fields_to_include:
         features.append(row['steamspy_tags'])
-    return " ".join(features)
+    return ' '.join(features)
 
-def get_content_based_recommendations(metadata, **filters):
+def get_content_based_recommendations(game_name='', description_keywords='', developer='', 
+                                    publisher='', platforms='', required_age=None, 
+                                    genres='', steamspy_tags_input='', metadata=None, top_n=50):
+    
     filtered_metadata = metadata.copy()
-
-    if filters.get("game_name"):
-        filtered_metadata = filtered_metadata[filtered_metadata['name'].str.lower() == filters["game_name"].lower()]
-
-    if filters.get("developer"):
-        filtered_metadata = filtered_metadata[filtered_metadata['developer'].str.contains(filters["developer"], case=False, na=False)]
-
-    if filters.get("publisher"):
-        filtered_metadata = filtered_metadata[filtered_metadata['publisher'].str.contains(filters["publisher"], case=False, na=False)]
-
-    if filters.get("platforms"):
-        filtered_metadata = filtered_metadata[filtered_metadata['platforms'].str.contains(filters["platforms"], case=False, na=False)]
-
-    if filters.get("required_age") is not None:
-        filtered_metadata = filtered_metadata[filtered_metadata['required_age'] == filters["required_age"]]
-
-    if filters.get("genres"):
-        filtered_metadata = filtered_metadata[filtered_metadata['genres'].str.contains(filters["genres"], case=False, na=False)]
-
-    if filters.get("steamspy_tags_input"):
-        tags = filters["steamspy_tags_input"].lower().split()
-        for tag in tags:
-            filtered_metadata = filtered_metadata[filtered_metadata['steamspy_tags'].str.contains(tag, case=False, na=False)]
-
+    
+    # Apply filters
+    if game_name.strip():
+        filtered_metadata = filtered_metadata[filtered_metadata['name'] == game_name]
+    
+    if developer.strip():
+        filtered_metadata = filtered_metadata[filtered_metadata['developer'].str.contains(developer, case=False, na=False)]
+    
+    if publisher.strip():
+        filtered_metadata = filtered_metadata[filtered_metadata['publisher'].str.contains(publisher, case=False, na=False)]
+    
+    if platforms.strip():
+        filtered_metadata = filtered_metadata[filtered_metadata['platforms'].str.contains(platforms, case=False, na=False)]
+    
+    if required_age is not None:
+        filtered_metadata = filtered_metadata[filtered_metadata['required_age'] == required_age]
+    
+    if genres.strip():
+        filtered_metadata = filtered_metadata[filtered_metadata['genres'].str.contains(genres, case=False, na=False)]
+    
+    if steamspy_tags_input.strip():
+        tags = steamspy_tags_input.lower().split()
+        if tags:
+            if 'or' in tags:
+                or_filter = filtered_metadata['steamspy_tags'].str.contains(tags[0], case=False, na=False)
+                for tag in tags[1:]:
+                    if tag != 'or':
+                        or_filter = or_filter | filtered_metadata['steamspy_tags'].str.contains(tag, case=False, na=False)
+                filtered_metadata = filtered_metadata[or_filter]
+            else:
+                for tag in tags:
+                    if tag != 'and':
+                        filtered_metadata = filtered_metadata[filtered_metadata['steamspy_tags'].str.contains(tag, case=False, na=False)]
+    
     if filtered_metadata.empty:
-        return []
+        return "No games found matching the specified filters."
+    
+    # If description keywords provided, use TF-IDF
+    if description_keywords.strip():
+        fields_to_include = ['description', 'genres', 'developer', 'publisher', 'platforms', 'required_age', 'steamspy_tags']
+        filtered_metadata['combined_features'] = filtered_metadata.apply(
+            lambda row: combine_features(row, fields_to_include), axis=1
+        )
+        
+        tfidf_filtered = TfidfVectorizer(stop_words='english')
+        tfidf_matrix_filtered = tfidf_filtered.fit_transform(filtered_metadata['combined_features'])
+        
+        input_vec = tfidf_filtered.transform([description_keywords])
+        sim_scores = linear_kernel(input_vec, tfidf_matrix_filtered).flatten()
+        sim_indices = sim_scores.argsort()[-top_n:][::-1]
+        
+        return filtered_metadata['name'].iloc[sim_indices]
+    else:
+        return filtered_metadata['name'].head(top_n)
 
-    # TF-IDF filtering
-    tfidf = TfidfVectorizer(stop_words="english")
-    tfidf_matrix = tfidf.fit_transform(filtered_metadata['combined_features'])
-    query = filters.get("description_keywords", "")
-    if not query:
-        return filtered_metadata['name'].head(20).tolist()
+# --- Collaborative Filtering Functions ---
+@st.cache_data
+def prepare_collaborative_data(_games_df, _ratings_df, _users_df):
+    """Prepare data for collaborative filtering"""
+    merged_df = pd.merge(_ratings_df, _games_df, on='appid')
+    merged_df = pd.merge(merged_df, _users_df, on='userID')
+    
+    user_item_matrix = merged_df.pivot_table(index='userID', columns='appid', values='rating')
+    user_item_matrix = user_item_matrix.fillna(0)
+    
+    return user_item_matrix, merged_df
 
-    input_vec = tfidf.transform([query])
-    sim_scores = linear_kernel(input_vec, tfidf_matrix).flatten()
-    indices = sim_scores.argsort()[-20:][::-1]
-    return filtered_metadata['name'].iloc[indices].tolist()
-
-
-# --- Collaborative Filtering ---
-def generate_collaborative_recommendations(selected_game_ratings_list, user_item_matrix, games_df):
+def generate_collaborative_recommendations(selected_game_ratings_list, user_item_matrix, games_df, similarity_metric='cosine'):
+    """Generate collaborative recommendations"""
     item_similarity = cosine_similarity(user_item_matrix.T)
-    item_similarity_df = pd.DataFrame(item_similarity, index=user_item_matrix.columns, columns=user_item_matrix.columns)
-
-    all_scores = {}
+    item_similarity_df = pd.DataFrame(item_similarity, 
+                                    index=user_item_matrix.columns, 
+                                    columns=user_item_matrix.columns)
+    
+    all_game_weighted_scores = {}
+    
     for selected_game, user_rating in selected_game_ratings_list:
-        game_appid = selected_game['appid'].iloc[0]
-        game_similarity_scores = item_similarity_df[game_appid]
-        weighted_scores = game_similarity_scores * user_rating
-        for appid, score in weighted_scores.items():
-            all_scores[appid] = all_scores.get(appid, 0) + score
+        selected_game_appid = selected_game['appid'].iloc[0]
+        try:
+            game_similarity_scores = item_similarity_df[selected_game_appid]
+            weighted_scores = game_similarity_scores * user_rating
+            
+            for appid, score in weighted_scores.items():
+                if appid not in all_game_weighted_scores:
+                    all_game_weighted_scores[appid] = 0
+                all_game_weighted_scores[appid] += score
+                
+        except KeyError:
+            st.warning(f"Game with appid {selected_game_appid} not found in user-item matrix. Skipping.")
+            continue
+    
+    all_game_weighted_scores_series = pd.Series(all_game_weighted_scores)
+    sorted_weighted_scores = all_game_weighted_scores_series.sort_values(ascending=False)
+    
+    # Remove already rated games
+    rated_game_appids = [game['appid'].iloc[0] for game, rating in selected_game_ratings_list]
+    recommendations = sorted_weighted_scores.drop(rated_game_appids, errors='ignore')
+    
+    return recommendations
 
-    sorted_scores = pd.Series(all_scores).sort_values(ascending=False)
-    rated_ids = [g['appid'].iloc[0] for g, _ in selected_game_ratings_list]
-    recommendations = sorted_scores.drop(rated_ids, errors='ignore').head(20)
-
-    return [(games_df.loc[games_df['appid'] == appid, 'name'].values[0], score) for appid, score in recommendations.items()]
-
-
-# --- MAIN APP ---
+# --- Streamlit App ---
 def main():
     st.title("🎮 Game Recommendation System")
-    st.sidebar.title("Choose Recommendation Mode")
-    choice = st.sidebar.radio("Select a method:", ["Content-Based Filtering", "Collaborative Filtering"])
+    st.write("Discover new games based on your preferences!")
+    
+    # Load data
+    with st.spinner("Loading data..."):
+        metadata = load_metadata()
+        users_df = load_users()
+        ratings_df = load_ratings()
+        
+        if ratings_df is None:
+            st.stop()
+        
+        # Fill NaN values
+        for col in ['short_description', 'developer', 'publisher', 'platforms', 
+                   'required_age', 'categories', 'genres', 'steamspy_tags', 
+                   'detailed_description', 'about_the_game']:
+            metadata[col] = metadata[col].fillna('')
+        
+        # Prepare collaborative data
+        user_item_matrix, merged_df = prepare_collaborative_data(metadata, ratings_df, users_df)
+    
+    # Recommendation type selection
+    st.sidebar.header("Recommendation Type")
+    rec_type = st.sidebar.radio("Choose recommendation type:", 
+                               ["Content-Based Filtering", "Collaborative Filtering"])
+    
+    if rec_type == "Content-Based Filtering":
+        content_based_ui(metadata)
+    else:
+        collaborative_ui(metadata, user_item_matrix)
 
-    metadata = load_metadata()
-    ratings_df = load_ratings()
-    users_df = load_users()
-
-    # Preprocess metadata
-    for col in ['short_description', 'developer', 'publisher', 'platforms', 'required_age', 'categories', 'genres', 'steamspy_tags', 'detailed_description', 'about_the_game']:
-        metadata[col] = metadata[col].fillna('')
-    fields_to_include = ['description', 'genres', 'developer', 'publisher', 'platforms', 'required_age', 'steamspy_tags']
-    metadata['combined_features'] = metadata.apply(lambda row: combine_features(row, fields_to_include), axis=1)
-
-    # Preprocess for collaborative filtering
-    merged_df = pd.merge(ratings_df, metadata, on="appid")
-    merged_df = pd.merge(merged_df, users_df, on="userID")
-    user_item_matrix = merged_df.pivot_table(index="userID", columns="appid", values="rating").fillna(0)
-    user_item_sparse_matrix = csr_matrix(user_item_matrix.values)
-
-    if choice == "Content-Based Filtering":
-        st.header("🔍 Content-Based Filtering")
-        game_name = st.text_input("Game Name")
-        description_keywords = st.text_input("Description Keywords")
-        developer = st.text_input("Developer")
-        publisher = st.text_input("Publisher")
-        platforms = st.text_input("Platforms")
-        required_age = st.number_input("Required Age", min_value=0, max_value=18, step=1)
-        genres = st.text_input("Genres")
-        steamspy_tags_input = st.text_input("SteamSpy Tags (separated by spaces)")
-
-        if st.button("Generate Recommendations"):
-            recs = get_content_based_recommendations(
-                metadata,
-                game_name=game_name,
+def content_based_ui(metadata):
+    st.header("Content-Based Recommendations")
+    st.write("Find games similar to your preferences")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Filter Criteria")
+        
+        # Game name search
+        game_names = [''] + sorted(metadata['name'].dropna().unique().tolist())
+        selected_game = st.selectbox("Search for a specific game:", game_names)
+        
+        # Text filters
+        description_keywords = st.text_input("Description keywords:")
+        developer = st.text_input("Developer:")
+        publisher = st.text_input("Publisher:")
+        platforms = st.text_input("Platforms:")
+        
+    with col2:
+        st.subheader("Additional Filters")
+        
+        # Age filter
+        age_options = ['Any'] + sorted(metadata['required_age'].dropna().unique().tolist())
+        required_age = st.selectbox("Required Age:", age_options)
+        required_age = None if required_age == 'Any' else required_age
+        
+        # Genre filter
+        genres = st.text_input("Genres:")
+        steamspy_tags = st.text_input("SteamSpy Tags (use 'and' or 'or'):")
+        
+        # Number of results
+        top_n = st.slider("Number of recommendations:", 5, 100, 20)
+    
+    if st.button("Generate Recommendations", type="primary"):
+        with st.spinner("Finding recommendations..."):
+            results = get_content_based_recommendations(
+                game_name=selected_game,
                 description_keywords=description_keywords,
                 developer=developer,
                 publisher=publisher,
                 platforms=platforms,
-                required_age=required_age if required_age > 0 else None,
+                required_age=required_age,
                 genres=genres,
-                steamspy_tags_input=steamspy_tags_input,
+                steamspy_tags_input=steamspy_tags,
+                metadata=metadata,
+                top_n=top_n
             )
-            if recs:
-                st.subheader("Recommended Games:")
-                for i, game in enumerate(recs, 1):
-                    st.write(f"{i}. {game}")
-            else:
-                st.warning("No games found with those filters.")
+        
+        if isinstance(results, str):
+            st.warning(results)
+        else:
+            st.success(f"Found {len(results)} recommendations!")
+            for i, game in enumerate(results, 1):
+                st.write(f"{i}. {game}")
 
-    elif choice == "Collaborative Filtering":
-        st.header("👥 Collaborative Filtering")
-        selected_game_ratings_list = []
-        game_name = st.text_input("Enter Game Name to Add")
-        user_rating = st.slider("Your Rating", 1, 5, 3)
-
-        if st.button("Add Game"):
-            selected_game = metadata[metadata['name'].str.lower() == game_name.lower()]
-            if not selected_game.empty:
-                selected_game_ratings_list.append((selected_game, user_rating))
-                st.success(f"Added {selected_game['name'].iloc[0]} with rating {user_rating}")
+def collaborative_ui(metadata, user_item_matrix):
+    st.header("Collaborative Filtering Recommendations")
+    st.write("Get recommendations based on games you've enjoyed")
+    
+    if 'rated_games' not in st.session_state:
+        st.session_state.rated_games = []
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Add Games You Like")
+        
+        # Game search
+        search_term = st.text_input("Search for games:")
+        if search_term:
+            matching_games = metadata[metadata['name'].str.contains(search_term, case=False, na=False)]
+            if not matching_games.empty:
+                selected_game_name = st.selectbox("Select game:", matching_games['name'].tolist())
+                rating = st.slider("Your rating (1-5):", 1, 5, 3)
+                
+                if st.button("Add Game"):
+                    selected_game = metadata[metadata['name'] == selected_game_name]
+                    st.session_state.rated_games.append((selected_game, rating))
+                    st.success(f"Added {selected_game_name} with rating {rating}")
             else:
-                st.warning("Game not found. Please check the spelling.")
-
-        if st.button("Generate Recommendations"):
-            if selected_game_ratings_list:
-                recs = generate_collaborative_recommendations(selected_game_ratings_list, user_item_matrix, metadata)
-                st.subheader("Recommended Games:")
-                for i, (game, score) in enumerate(recs, 1):
-                    st.write(f"{i}. {game} (Similarity Score: {score:.2f})")
-            else:
-                st.warning("Please add at least one game and rating first.")
+                st.write("No games found matching your search.")
+    
+    with col2:
+        st.subheader("Your Rated Games")
+        if st.session_state.rated_games:
+            for i, (game, rating) in enumerate(st.session_state.rated_games):
+                game_name = game['name'].iloc[0]
+                col_a, col_b = st.columns([3, 1])
+                with col_a:
+                    st.write(game_name)
+                with col_b:
+                    if st.button("Remove", key=f"remove_{i}"):
+                        st.session_state.rated_games.pop(i)
+                        st.rerun()
+            
+            if st.button("Generate Recommendations", type="primary"):
+                with st.spinner("Analyzing your preferences..."):
+                    recommendations = generate_collaborative_recommendations(
+                        st.session_state.rated_games, user_item_matrix, metadata
+                    )
+                
+                st.success("Top recommendations for you:")
+                for i, (appid, score) in enumerate(recommendations.head(10).items(), 1):
+                    game_name = metadata[metadata['appid'] == appid]['name'].iloc[0]
+                    st.write(f"{i}. {game_name} (Score: {score:.2f})")
+        else:
+            st.info("Add some games you've enjoyed to get recommendations!")
 
 if __name__ == "__main__":
     main()
